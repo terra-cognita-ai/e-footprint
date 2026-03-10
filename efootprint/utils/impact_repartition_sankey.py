@@ -236,6 +236,8 @@ class ImpactRepartitionSankey:
     def _compute_node_columns(self):
         if not self.link_sources:
             return {idx: 0 for idx in range(len(self.node_labels))}
+        from collections import deque
+
         adjacency = {}
         incoming_count = {idx: 0 for idx in range(len(self.node_labels))}
         for source, target in zip(self.link_sources, self.link_targets):
@@ -244,13 +246,14 @@ class ImpactRepartitionSankey:
             incoming_count.setdefault(source, 0)
         root_nodes = [idx for idx, nb_incoming in incoming_count.items() if nb_incoming == 0]
         node_columns = {root_idx: 0 for root_idx in root_nodes}
-        queue = list(root_nodes)
+        remaining_incoming = dict(incoming_count)
+        queue = deque(root_nodes)
         while queue:
-            node_idx = queue.pop(0)
+            node_idx = queue.popleft()
             for child_idx in adjacency.get(node_idx, []):
-                next_col = node_columns[node_idx] + 1
-                if child_idx not in node_columns or next_col < node_columns[child_idx]:
-                    node_columns[child_idx] = next_col
+                node_columns[child_idx] = max(node_columns.get(child_idx, 0), node_columns[node_idx] + 1)
+                remaining_incoming[child_idx] -= 1
+                if remaining_incoming[child_idx] == 0:
                     queue.append(child_idx)
         return node_columns
 
@@ -495,8 +498,10 @@ if __name__ == '__main__':
     from efootprint.core.usage.edge.recurrent_server_need import RecurrentServerNeed
     from efootprint.core.usage.edge.recurrent_edge_component_need import RecurrentEdgeComponentNeed
     test = "json"
-    skipped_impact_repartition_classes = [
+    skipped_impact_repartition_classes__full = [
         JobBase, EdgeWorkloadComponent, RecurrentEdgeDeviceNeed, RecurrentServerNeed, RecurrentEdgeComponentNeed]
+    skipped_impact_repartition_classes = [
+        JobBase, RecurrentEdgeDeviceNeed, RecurrentServerNeed, RecurrentEdgeComponentNeed]
     if test == "service":
         from tests.integration_tests.integration_services_base_class import IntegrationTestServicesBaseClass
         system, start_date = IntegrationTestServicesBaseClass.generate_system_with_services()

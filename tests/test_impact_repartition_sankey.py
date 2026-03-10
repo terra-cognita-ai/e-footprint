@@ -266,6 +266,31 @@ class TestImpactRepartitionSankey(TestCase):
             {"column_index": 2, "x_center": 0.8333333333333334, "class_names": ["ChildBig", "ChildSmallA", "ChildSmallB"]},
         ], column_metadata)
 
+    def test_compute_node_columns_places_shared_child_after_deepest_parent(self):
+        system = MagicMock()
+        system.name = "Test system"
+        sankey = ImpactRepartitionSankey(system, aggregation_threshold_percent=0)
+
+        total_idx = sankey._add_node("Test system", ("system", "total"), color_key="__system__")
+        direct_parent_idx = sankey._add_node("Direct parent", ("direct_parent", "energy"), obj=self._make_object("Direct parent"))
+        intermediate_idx = sankey._add_node("Intermediate", ("intermediate", "energy"), obj=self._make_object("Intermediate"))
+        deep_parent_idx = sankey._add_node("Deep parent", ("deep_parent", "energy"), obj=self._make_object("Deep parent"))
+        shared_child_idx = sankey._add_node("Shared child", ("shared_child", "energy"), obj=self._make_object("Shared child"))
+
+        sankey._add_link(total_idx, direct_parent_idx, 0.4)
+        sankey._add_link(total_idx, intermediate_idx, 0.3)
+        sankey._add_link(intermediate_idx, deep_parent_idx, 0.2)
+        sankey._add_link(direct_parent_idx, shared_child_idx, 0.1)
+        sankey._add_link(deep_parent_idx, shared_child_idx, 0.1)
+
+        self.assertEqual({
+            total_idx: 0,
+            direct_parent_idx: 1,
+            intermediate_idx: 1,
+            deep_parent_idx: 2,
+            shared_child_idx: 3,
+        }, sankey._compute_node_columns())
+
     def test_get_column_information_distinguishes_manual_and_impact_columns(self):
         grandchild = _DummyObject("Grandchild", "grandchild")
         grandchild.class_as_simple_str = "Grandchild"
