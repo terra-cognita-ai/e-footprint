@@ -37,6 +37,7 @@ class ImpactRepartitionSankey:
         self.link_sources = []
         self.link_targets = []
         self.link_values = []
+        self._link_index_by_edge = {}
         self.node_total_kg = []
         self._built = False
         self._total_system_kg = 0
@@ -81,9 +82,15 @@ class ImpactRepartitionSankey:
 
     def _add_link(self, source, target, value_tonnes):
         if value_tonnes > 0:
-            self.link_sources.append(source)
-            self.link_targets.append(target)
-            self.link_values.append(value_tonnes)
+            edge = (source, target)
+            existing_link_idx = self._link_index_by_edge.get(edge)
+            if existing_link_idx is None:
+                self._link_index_by_edge[edge] = len(self.link_sources)
+                self.link_sources.append(source)
+                self.link_targets.append(target)
+                self.link_values.append(value_tonnes)
+            else:
+                self.link_values[existing_link_idx] += value_tonnes
             self.node_total_kg[target] += value_tonnes * 1000
 
     @staticmethod
@@ -293,6 +300,7 @@ class ImpactRepartitionSankey:
         self.link_sources = []
         self.link_targets = []
         self.link_values = []
+        self._link_index_by_edge = {}
         self.node_total_kg = []
 
         old_to_new_indices = {}
@@ -460,10 +468,10 @@ class ImpactRepartitionSankey:
                 color=link_colors, customdata=link_labels, hovertemplate="%{customdata}<extra></extra>",
             ),
         )])
-        bottom_margin = 40
+        bottom_margin = 100
         if column_information_text is not None:
             line_count = column_information_text.count("<br>") + 1
-            bottom_margin = 40 + 18 * line_count
+            bottom_margin = 100 + 18 * line_count
             fig.add_annotation(
                 x=0,
                 y=-0.12,
@@ -506,6 +514,6 @@ if __name__ == '__main__':
         system = next(iter(class_obj_dict["System"].values()))
     sankey = ImpactRepartitionSankey(
         system, aggregation_threshold_percent=1, skipped_impact_repartition_classes=skipped_impact_repartition_classes,
-    skip_total_footprint_split=True)
+    skip_total_footprint_split=True, skip_object_footprint_split=True)
     fig = sankey.figure()
     fig.show()

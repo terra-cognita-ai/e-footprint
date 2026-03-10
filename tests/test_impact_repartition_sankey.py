@@ -141,8 +141,8 @@ class TestImpactRepartitionSankey(TestCase):
         self.assertTrue(any("Parent A" in label and "Parent B" in label for label in hover_labels))
         self.assertTrue(any("Child A" in label and "Child B" in label for label in hover_labels))
 
-    def test_build_expands_recursive_repartition_for_each_incoming_contribution(self):
-        """Test recursive repartition is propagated from each incoming flow contribution."""
+    def test_build_merges_recursive_repartition_contributions_on_same_edge(self):
+        """Test recursive repartition contributions sharing an edge are merged into one flow."""
         grandchild = _DummyObject("Grandchild", "grandchild")
         child = _DummyObject("Child", "child")
         parent = _DummyObject("Parent", "parent")
@@ -168,9 +168,40 @@ class TestImpactRepartitionSankey(TestCase):
             if source == child_idx and target == grandchild_idx
         ]
 
-        self.assertEqual([0.1, 0.1], incoming_to_grandchild)
-        self.assertEqual(0.2, sum(incoming_to_grandchild))
+        self.assertEqual([0.2], incoming_to_grandchild)
         self.assertEqual(200, sankey.node_total_kg[grandchild_idx])
+
+    def test_skip_object_footprint_split_merges_identical_child_edges(self):
+        """Test skipping object nodes keeps a single outbound flow per parent-child pair."""
+        shared_child = _DummyObject("Shared child", "shared_child")
+        parent_a = _DummyObject("Parent A", "parent_a")
+        parent_b = _DummyObject("Parent B", "parent_b")
+        parent_a.impact_repartition = {shared_child: _DummyQuantity(1)}
+        parent_b.impact_repartition = {shared_child: _DummyQuantity(1)}
+
+        system = MagicMock()
+        system.name = "Test system"
+        system.total_fabrication_footprint_sum_over_period = {"edge": _DummyQuantity(180)}
+        system.total_energy_footprint_sum_over_period = {}
+        system.fabrication_footprint_sum_over_period = {"edge": {
+            parent_a: _DummyQuantity(100), parent_b: _DummyQuantity(80),
+        }}
+        system.energy_footprint_sum_over_period = {}
+
+        sankey = ImpactRepartitionSankey(
+            system, aggregation_threshold_percent=0, skip_object_footprint_split=True)
+
+        sankey.build()
+
+        edge_idx = sankey.node_indices[("edge", "fabrication")]
+        shared_child_idx = sankey.node_indices[("shared_child", "fabrication")]
+        shared_child_links = [
+            value
+            for source, target, value in zip(sankey.link_sources, sankey.link_targets, sankey.link_values)
+            if source == edge_idx and target == shared_child_idx
+        ]
+
+        self.assertEqual([0.18], shared_child_links)
 
     def test_node_labels_are_truncated_but_hover_keeps_full_name(self):
         system = MagicMock()
