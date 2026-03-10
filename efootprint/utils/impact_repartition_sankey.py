@@ -15,7 +15,8 @@ class ImpactRepartitionSankey:
     def __init__(
             self, system, aggregation_threshold_percent=1, node_label_max_length=13,
             skipped_impact_repartition_classes=None, skip_total_footprint_split=False,
-            skip_phase_footprint_split=False, skip_object_footprint_split=False):
+            skip_phase_footprint_split=False, skip_object_footprint_split=False,
+            display_column_information=True):
         self.system = system
         self.aggregation_threshold_percent = aggregation_threshold_percent
         self.node_label_max_length = node_label_max_length
@@ -23,6 +24,7 @@ class ImpactRepartitionSankey:
         self.skip_total_footprint_split = skip_total_footprint_split
         self.skip_phase_footprint_split = skip_phase_footprint_split
         self.skip_object_footprint_split = skip_object_footprint_split
+        self.display_column_information = display_column_information
         self.node_labels = []
         self.full_node_labels = []
         self.node_indices = {}
@@ -346,6 +348,50 @@ class ImpactRepartitionSankey:
             "class_names": sorted(class_names),
         } for column, class_names in sorted(classes_by_column.items()) if class_names]
 
+    def get_column_information(self):
+        manual_columns = []
+        next_column_index = 1
+        if not self.skip_total_footprint_split:
+            manual_columns.append({
+                "column_index": next_column_index,
+                "column_type": "manual_split",
+                "description": "Full system footprint split (Fabrication / Energy)",
+            })
+            next_column_index += 1
+        if not self.skip_phase_footprint_split:
+            manual_columns.append({
+                "column_index": next_column_index,
+                "column_type": "manual_split",
+                "description": "Fabrication / energy footprint split",
+            })
+            next_column_index += 1
+        if not self.skip_object_footprint_split:
+            manual_columns.append({
+                "column_index": next_column_index,
+                "column_type": "manual_split",
+                "description": "Per object footprint split",
+            })
+            next_column_index += 1
+
+        return manual_columns + [{
+            "column_index": column_metadata["column_index"],
+            "column_type": "impact_repartition",
+            "class_names": column_metadata["class_names"],
+        } for column_metadata in self.get_column_metadata() if column_metadata["column_index"] >= next_column_index]
+
+    def _build_column_information_text(self):
+        column_information = self.get_column_information()
+        if not column_information:
+            return None
+        return "<br>".join([
+            (
+                f"Column {column_info['column_index']}: {column_info['description']}"
+                if column_info["column_type"] == "manual_split"
+                else f"Column {column_info['column_index']}: {', '.join(column_info['class_names'])}"
+            )
+            for column_info in column_information
+        ])
+
     def figure(self, title=None, width=1800):
         import plotly.graph_objects as go
         self.build()
@@ -358,6 +404,7 @@ class ImpactRepartitionSankey:
         link_labels = self._build_link_labels()
         node_colors = self._compute_node_colors()
         link_colors = [node_colors[src].replace("0.8)", "0.3)") for src in self.link_sources]
+        column_information_text = self._build_column_information_text() if self.display_column_information else None
 
         fig = go.Figure(data=[go.Sankey(
             arrangement="snap",
@@ -370,7 +417,23 @@ class ImpactRepartitionSankey:
                 color=link_colors, customdata=link_labels, hovertemplate="%{customdata}<extra></extra>",
             ),
         )])
-        fig.update_layout(title_text=title, font_size=12, height=800, width=width)
+        bottom_margin = 40
+        if column_information_text is not None:
+            line_count = column_information_text.count("<br>") + 1
+            bottom_margin = 40 + 18 * line_count
+            fig.add_annotation(
+                x=0,
+                y=-0.12,
+                xref="paper",
+                yref="paper",
+                xanchor="left",
+                yanchor="top",
+                align="left",
+                showarrow=False,
+                text=column_information_text,
+                font=dict(size=11),
+            )
+        fig.update_layout(title_text=title, font_size=12, height=800, width=width, margin=dict(b=bottom_margin))
         return fig
 
 

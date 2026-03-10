@@ -174,6 +174,58 @@ class TestImpactRepartitionSankey(TestCase):
             {"column_index": 2, "x_center": 0.8333333333333334, "class_names": ["ChildBig", "ChildSmallA", "ChildSmallB"]},
         ], column_metadata)
 
+    def test_get_column_information_distinguishes_manual_and_impact_columns(self):
+        system = MagicMock()
+        system.name = "Test system"
+        sankey = ImpactRepartitionSankey(system, aggregation_threshold_percent=0)
+
+        total_idx = sankey._add_node("Test system", ("system", "total"), color_key="__system__")
+        server = _DummyObject("Server", "server")
+        server.class_as_simple_str = "Server"
+        server_idx = sankey._add_node("Server", ("server", "energy"), obj=server)
+        sankey._total_system_kg = 1000
+        sankey.node_total_kg[total_idx] = 1000
+        sankey._add_link(total_idx, server_idx, 0.4)
+
+        self.assertEqual([
+            {"column_index": 1, "column_type": "manual_split", "description": "Full system footprint split (Fabrication / Energy)"},
+            {"column_index": 2, "column_type": "manual_split", "description": "Fabrication / energy footprint split"},
+            {"column_index": 3, "column_type": "manual_split", "description": "Per object footprint split"},
+        ], sankey.get_column_information())
+
+    def test_figure_displays_column_information_by_default(self):
+        grandchild = _DummyObject("Grandchild", "grandchild")
+        grandchild.class_as_simple_str = "Grandchild"
+        child = _DummyObject("Child", "child")
+        child.class_as_simple_str = "Child"
+        child.impact_repartition = {grandchild: _DummyQuantity(1)}
+
+        system = MagicMock()
+        system.name = "Test system"
+        system.total_fabrication_footprint_sum_over_period = {"edge": _DummyQuantity(100)}
+        system.total_energy_footprint_sum_over_period = {}
+        system.fabrication_footprint_sum_over_period = {"edge": {child: _DummyQuantity(100)}}
+        system.energy_footprint_sum_over_period = {}
+
+        fig = ImpactRepartitionSankey(system, aggregation_threshold_percent=0).figure()
+
+        self.assertEqual(1, len(fig.layout.annotations))
+        self.assertIn("Column 1: Full system footprint split (Fabrication / Energy)", fig.layout.annotations[0]["text"])
+        self.assertIn("Column 4: Grandchild", fig.layout.annotations[0]["text"])
+
+    def test_figure_can_hide_column_information(self):
+        system = MagicMock()
+        system.name = "Test system"
+        system.total_fabrication_footprint_sum_over_period = {}
+        system.total_energy_footprint_sum_over_period = {}
+        system.fabrication_footprint_sum_over_period = {}
+        system.energy_footprint_sum_over_period = {}
+
+        fig = ImpactRepartitionSankey(
+            system, aggregation_threshold_percent=0, display_column_information=False).figure()
+
+        self.assertEqual((), fig.layout.annotations)
+
     def test_build_skips_configured_impact_repartition_classes(self):
         grandchild = _DummyObject("Grandchild", "grandchild")
         skipped_child = _DummyObject("Skipped child", "skipped_child")
