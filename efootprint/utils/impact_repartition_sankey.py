@@ -12,10 +12,17 @@ _COLORS = [
 
 
 class ImpactRepartitionSankey:
-    def __init__(self, system, aggregation_threshold_percent=1, node_label_max_length=13):
+    def __init__(
+            self, system, aggregation_threshold_percent=1, node_label_max_length=13,
+            skipped_impact_repartition_classes=None, skip_total_footprint_split=False,
+            skip_phase_footprint_split=False, skip_object_footprint_split=False):
         self.system = system
         self.aggregation_threshold_percent = aggregation_threshold_percent
         self.node_label_max_length = node_label_max_length
+        self.skipped_impact_repartition_classes = skipped_impact_repartition_classes or []
+        self.skip_total_footprint_split = skip_total_footprint_split
+        self.skip_phase_footprint_split = skip_phase_footprint_split
+        self.skip_object_footprint_split = skip_object_footprint_split
         self.node_labels = []
         self.full_node_labels = []
         self.node_indices = {}
@@ -41,6 +48,17 @@ class ImpactRepartitionSankey:
         if isinstance(class_name, str) and class_name:
             return class_name
         return obj.__class__.__name__.lstrip("_")
+
+    def _should_skip_object(self, obj):
+        obj_class_name = self._format_class_name(obj)
+        for skipped_class in self.skipped_impact_repartition_classes:
+            if isinstance(skipped_class, str):
+                if obj_class_name == skipped_class or obj.__class__.__name__ == skipped_class:
+                    return True
+                continue
+            if isinstance(skipped_class, type) and isinstance(obj, skipped_class):
+                return True
+        return False
 
     def _add_node(self, label, key, color_key=None, obj=None):
         if key in self.node_indices:
@@ -81,11 +99,24 @@ class ImpactRepartitionSankey:
             child_value = total_tonnes * self._get_fraction_magnitude(fraction)
             if child_value <= 0:
                 continue
-            child_key = (child_obj.id, footprint_type)
-            child_idx = self._add_node(child_obj.name, child_key, color_key=child_obj.id, obj=child_obj)
-            self._add_link(node_idx, child_idx, child_value)
-            self._expand_impact_repartition(
-                child_idx, child_obj, child_value, footprint_type, ancestor_ids=next_ancestor_ids)
+            self._add_object_impact_to_sankey(
+                node_idx, child_obj, child_value, footprint_type, ancestor_ids=next_ancestor_ids)
+
+    def _add_object_impact_to_sankey(
+            self, source_idx, obj, total_tonnes, footprint_type, ancestor_ids=None, skip_current_object=False):
+        if total_tonnes <= 0:
+            return
+        ancestor_ids = set() if ancestor_ids is None else ancestor_ids
+        if obj.id in ancestor_ids:
+            return
+        if skip_current_object or self._should_skip_object(obj):
+            self._expand_impact_repartition(source_idx, obj, total_tonnes, footprint_type, ancestor_ids=ancestor_ids)
+            return
+
+        obj_key = (obj.id, footprint_type)
+        obj_idx = self._add_node(obj.name, obj_key, color_key=obj.id, obj=obj)
+        self._add_link(source_idx, obj_idx, total_tonnes)
+        self._expand_impact_repartition(obj_idx, obj, total_tonnes, footprint_type, ancestor_ids=ancestor_ids)
 
     def build(self):
         if self._built:
@@ -104,35 +135,45 @@ class ImpactRepartitionSankey:
 
         system_idx = self._add_node(system.name, ("system", "total"), color_key="__system__")
         self.node_total_kg[system_idx] = self._total_system_kg
-        fab_idx = self._add_node("Fabrication", ("phase", "fabrication"), color_key="__fabrication__")
-        energy_idx = self._add_node("Energy", ("phase", "energy"), color_key="__energy__")
-        self._add_link(system_idx, fab_idx, total_fab_kg / 1000)
-        self._add_link(system_idx, energy_idx, total_energy_kg / 1000)
+        phase_parents = {
+            "fabrication": system_idx,
+            "energy": system_idx,
+        }
+        if not self.skip_total_footprint_split:
+            fab_idx = self._add_node("Fabrication", ("phase", "fabrication"), color_key="__fabrication__")
+            energy_idx = self._add_node("Energy", ("phase", "energy"), color_key="__energy__")
+            self._add_link(system_idx, fab_idx, total_fab_kg / 1000)
+            self._add_link(system_idx, energy_idx, total_energy_kg / 1000)
+            phase_parents["fabrication"] = fab_idx
+            phase_parents["energy"] = energy_idx
 
         fab_by_obj = system.fabrication_footprint_sum_over_period
         energy_by_obj = system.energy_footprint_sum_over_period
 
-        for phase_label, phase_idx, total_dict, obj_dict in [
-            ("fabrication", fab_idx, total_fab_dict, fab_by_obj),
-            ("energy", energy_idx, total_energy_dict, energy_by_obj),
+        for phase_label, total_dict, obj_dict in [
+            ("fabrication", total_fab_dict, fab_by_obj),
+            ("energy", total_energy_dict, energy_by_obj),
         ]:
+            phase_parent_idx = phase_parents[phase_label]
             for category, category_total in total_dict.items():
                 cat_kg = category_total.magnitude if not isinstance(category_total, EmptyExplainableObject) else 0
                 cat_tonnes = cat_kg / 1000
                 if cat_tonnes <= 0:
                     continue
-                cat_idx = self._add_node(
-                    f"{category} {phase_label}", (category, phase_label), color_key=f"__cat_{category}__")
-                self._add_link(phase_idx, cat_idx, cat_tonnes)
+                object_parent_idx = phase_parent_idx
+                if not self.skip_phase_footprint_split:
+                    cat_idx = self._add_node(
+                        f"{category} {phase_label}", (category, phase_label), color_key=f"__cat_{category}__")
+                    self._add_link(phase_parent_idx, cat_idx, cat_tonnes)
+                    object_parent_idx = cat_idx
 
                 for obj, obj_quantity in obj_dict[category].items():
                     obj_tonnes = obj_quantity.magnitude / 1000
                     if obj_tonnes <= 0:
                         continue
-                    obj_key = (obj.id, phase_label)
-                    obj_idx = self._add_node(obj.name, obj_key, color_key=obj.id, obj=obj)
-                    self._add_link(cat_idx, obj_idx, obj_tonnes)
-                    self._expand_impact_repartition(obj_idx, obj, obj_tonnes, phase_label)
+                    self._add_object_impact_to_sankey(
+                        object_parent_idx, obj, obj_tonnes, phase_label,
+                        skip_current_object=self.skip_object_footprint_split)
         self._aggregate_small_nodes_by_column()
 
     def _get_footprint_type_for_node(self, node_idx):

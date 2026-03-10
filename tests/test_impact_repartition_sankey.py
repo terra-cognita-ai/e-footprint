@@ -173,3 +173,61 @@ class TestImpactRepartitionSankey(TestCase):
             {"column_index": 1, "x_center": 0.5, "class_names": ["Parent", "SmallA", "SmallB"]},
             {"column_index": 2, "x_center": 0.8333333333333334, "class_names": ["ChildBig", "ChildSmallA", "ChildSmallB"]},
         ], column_metadata)
+
+    def test_build_skips_configured_impact_repartition_classes(self):
+        grandchild = _DummyObject("Grandchild", "grandchild")
+        skipped_child = _DummyObject("Skipped child", "skipped_child")
+        skipped_child.class_as_simple_str = "SkippedClass"
+        parent = _DummyObject("Parent", "parent")
+        skipped_child.impact_repartition = {grandchild: _DummyQuantity(1)}
+        parent.impact_repartition = {skipped_child: _DummyQuantity(1)}
+
+        system = MagicMock()
+        system.name = "Test system"
+        system.total_fabrication_footprint_sum_over_period = {"edge": _DummyQuantity(100)}
+        system.total_energy_footprint_sum_over_period = {}
+        system.fabrication_footprint_sum_over_period = {"edge": {parent: _DummyQuantity(100)}}
+        system.energy_footprint_sum_over_period = {}
+
+        sankey = ImpactRepartitionSankey(
+            system, aggregation_threshold_percent=0, skipped_impact_repartition_classes=["SkippedClass"])
+
+        sankey.build()
+
+        self.assertNotIn(("skipped_child", "fabrication"), sankey.node_indices)
+        parent_idx = sankey.node_indices[("parent", "fabrication")]
+        grandchild_idx = sankey.node_indices[("grandchild", "fabrication")]
+        self.assertEqual([0.1], [
+            value
+            for source, target, value in zip(sankey.link_sources, sankey.link_targets, sankey.link_values)
+            if source == parent_idx and target == grandchild_idx
+        ])
+
+    def test_build_can_skip_manual_split_layers(self):
+        grandchild = _DummyObject("Grandchild", "grandchild")
+        child = _DummyObject("Child", "child")
+        child.impact_repartition = {grandchild: _DummyQuantity(1)}
+
+        system = MagicMock()
+        system.name = "Test system"
+        system.total_fabrication_footprint_sum_over_period = {"edge": _DummyQuantity(100)}
+        system.total_energy_footprint_sum_over_period = {}
+        system.fabrication_footprint_sum_over_period = {"edge": {child: _DummyQuantity(100)}}
+        system.energy_footprint_sum_over_period = {}
+
+        sankey = ImpactRepartitionSankey(
+            system, aggregation_threshold_percent=0, skip_total_footprint_split=True,
+            skip_phase_footprint_split=True, skip_object_footprint_split=True)
+
+        sankey.build()
+
+        self.assertNotIn(("phase", "fabrication"), sankey.node_indices)
+        self.assertNotIn(("edge", "fabrication"), sankey.node_indices)
+        self.assertNotIn(("child", "fabrication"), sankey.node_indices)
+        system_idx = sankey.node_indices[("system", "total")]
+        grandchild_idx = sankey.node_indices[("grandchild", "fabrication")]
+        self.assertEqual([0.1], [
+            value
+            for source, target, value in zip(sankey.link_sources, sankey.link_targets, sankey.link_values)
+            if source == system_idx and target == grandchild_idx
+        ])
