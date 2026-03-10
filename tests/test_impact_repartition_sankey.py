@@ -175,22 +175,27 @@ class TestImpactRepartitionSankey(TestCase):
         ], column_metadata)
 
     def test_get_column_information_distinguishes_manual_and_impact_columns(self):
+        grandchild = _DummyObject("Grandchild", "grandchild")
+        grandchild.class_as_simple_str = "Grandchild"
+        child = _DummyObject("Child", "child")
+        child.class_as_simple_str = "Child"
+        child.impact_repartition = {grandchild: _DummyQuantity(1)}
+
         system = MagicMock()
         system.name = "Test system"
+        system.total_fabrication_footprint_sum_over_period = {"edge": _DummyQuantity(100)}
+        system.total_energy_footprint_sum_over_period = {}
+        system.fabrication_footprint_sum_over_period = {"edge": {child: _DummyQuantity(100)}}
+        system.energy_footprint_sum_over_period = {}
+
         sankey = ImpactRepartitionSankey(system, aggregation_threshold_percent=0)
 
-        total_idx = sankey._add_node("Test system", ("system", "total"), color_key="__system__")
-        server = _DummyObject("Server", "server")
-        server.class_as_simple_str = "Server"
-        server_idx = sankey._add_node("Server", ("server", "energy"), obj=server)
-        sankey._total_system_kg = 1000
-        sankey.node_total_kg[total_idx] = 1000
-        sankey._add_link(total_idx, server_idx, 0.4)
-
         self.assertEqual([
-            {"column_index": 1, "column_type": "manual_split", "description": "Full system footprint split (Fabrication / Energy)"},
-            {"column_index": 2, "column_type": "manual_split", "description": "Fabrication / energy footprint split"},
-            {"column_index": 3, "column_type": "manual_split", "description": "Per object footprint split"},
+            {"column_index": 0, "column_type": "manual_split", "description": "Full system footprint"},
+            {"column_index": 1, "column_type": "manual_split", "description": "Fabrication / energy footprint"},
+            {"column_index": 2, "column_type": "manual_split", "description": "Per object category footprint"},
+            {"column_index": 3, "column_type": "manual_split", "description": "Per object footprint"},
+            {"column_index": 4, "column_type": "impact_repartition", "class_names": ["Grandchild"]},
         ], sankey.get_column_information())
 
     def test_figure_displays_column_information_by_default(self):
@@ -210,7 +215,8 @@ class TestImpactRepartitionSankey(TestCase):
         fig = ImpactRepartitionSankey(system, aggregation_threshold_percent=0).figure()
 
         self.assertEqual(1, len(fig.layout.annotations))
-        self.assertIn("Column 1: Full system footprint split (Fabrication / Energy)", fig.layout.annotations[0]["text"])
+        self.assertIn("Column 0: Full system footprint", fig.layout.annotations[0]["text"])
+        self.assertIn("Column 2: Per object category footprint", fig.layout.annotations[0]["text"])
         self.assertIn("Column 4: Grandchild", fig.layout.annotations[0]["text"])
 
     def test_figure_can_hide_column_information(self):
@@ -255,7 +261,86 @@ class TestImpactRepartitionSankey(TestCase):
             if source == parent_idx and target == grandchild_idx
         ])
 
-    def test_build_can_skip_manual_split_layers(self):
+    def test_skip_total_footprint_split_removes_system_node_only(self):
+        grandchild = _DummyObject("Grandchild", "grandchild")
+        child = _DummyObject("Child", "child")
+        child.impact_repartition = {grandchild: _DummyQuantity(1)}
+
+        system = MagicMock()
+        system.name = "Test system"
+        system.total_fabrication_footprint_sum_over_period = {"edge": _DummyQuantity(100)}
+        system.total_energy_footprint_sum_over_period = {}
+        system.fabrication_footprint_sum_over_period = {"edge": {child: _DummyQuantity(100)}}
+        system.energy_footprint_sum_over_period = {}
+
+        sankey = ImpactRepartitionSankey(
+            system, aggregation_threshold_percent=0, skip_total_footprint_split=True)
+
+        sankey.build()
+
+        self.assertNotIn(("system", "total"), sankey.node_indices)
+        fab_idx = sankey.node_indices[("phase", "fabrication")]
+        edge_idx = sankey.node_indices[("edge", "fabrication")]
+        self.assertEqual([0.1], [
+            value
+            for source, target, value in zip(sankey.link_sources, sankey.link_targets, sankey.link_values)
+            if source == fab_idx and target == edge_idx
+        ])
+
+    def test_skip_phase_footprint_split_removes_fabrication_energy_nodes_only(self):
+        grandchild = _DummyObject("Grandchild", "grandchild")
+        child = _DummyObject("Child", "child")
+        child.impact_repartition = {grandchild: _DummyQuantity(1)}
+
+        system = MagicMock()
+        system.name = "Test system"
+        system.total_fabrication_footprint_sum_over_period = {"edge": _DummyQuantity(100)}
+        system.total_energy_footprint_sum_over_period = {}
+        system.fabrication_footprint_sum_over_period = {"edge": {child: _DummyQuantity(100)}}
+        system.energy_footprint_sum_over_period = {}
+
+        sankey = ImpactRepartitionSankey(
+            system, aggregation_threshold_percent=0, skip_phase_footprint_split=True)
+
+        sankey.build()
+
+        self.assertIn(("system", "total"), sankey.node_indices)
+        self.assertNotIn(("phase", "fabrication"), sankey.node_indices)
+        system_idx = sankey.node_indices[("system", "total")]
+        edge_idx = sankey.node_indices[("edge", "fabrication")]
+        self.assertEqual([0.1], [
+            value
+            for source, target, value in zip(sankey.link_sources, sankey.link_targets, sankey.link_values)
+            if source == system_idx and target == edge_idx
+        ])
+
+    def test_skip_object_category_footprint_split_removes_category_nodes_only(self):
+        grandchild = _DummyObject("Grandchild", "grandchild")
+        child = _DummyObject("Child", "child")
+        child.impact_repartition = {grandchild: _DummyQuantity(1)}
+
+        system = MagicMock()
+        system.name = "Test system"
+        system.total_fabrication_footprint_sum_over_period = {"edge": _DummyQuantity(100)}
+        system.total_energy_footprint_sum_over_period = {}
+        system.fabrication_footprint_sum_over_period = {"edge": {child: _DummyQuantity(100)}}
+        system.energy_footprint_sum_over_period = {}
+
+        sankey = ImpactRepartitionSankey(
+            system, aggregation_threshold_percent=0, skip_object_category_footprint_split=True)
+
+        sankey.build()
+
+        fab_idx = sankey.node_indices[("phase", "fabrication")]
+        self.assertNotIn(("edge", "fabrication"), sankey.node_indices)
+        child_idx = sankey.node_indices[("child", "fabrication")]
+        self.assertEqual([0.1], [
+            value
+            for source, target, value in zip(sankey.link_sources, sankey.link_targets, sankey.link_values)
+            if source == fab_idx and target == child_idx
+        ])
+
+    def test_build_can_skip_all_manual_split_layers(self):
         grandchild = _DummyObject("Grandchild", "grandchild")
         child = _DummyObject("Child", "child")
         child.impact_repartition = {grandchild: _DummyQuantity(1)}
@@ -269,17 +354,18 @@ class TestImpactRepartitionSankey(TestCase):
 
         sankey = ImpactRepartitionSankey(
             system, aggregation_threshold_percent=0, skip_total_footprint_split=True,
-            skip_phase_footprint_split=True, skip_object_footprint_split=True)
+            skip_phase_footprint_split=True, skip_object_category_footprint_split=True,
+            skip_object_footprint_split=True)
 
         sankey.build()
 
+        self.assertNotIn(("system", "total"), sankey.node_indices)
         self.assertNotIn(("phase", "fabrication"), sankey.node_indices)
         self.assertNotIn(("edge", "fabrication"), sankey.node_indices)
         self.assertNotIn(("child", "fabrication"), sankey.node_indices)
-        system_idx = sankey.node_indices[("system", "total")]
         grandchild_idx = sankey.node_indices[("grandchild", "fabrication")]
         self.assertEqual([0.1], [
             value
             for source, target, value in zip(sankey.link_sources, sankey.link_targets, sankey.link_values)
-            if source == system_idx and target == grandchild_idx
+            if target == grandchild_idx
         ])
