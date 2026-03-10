@@ -247,10 +247,18 @@ class ImpactRepartitionSankey:
                     queue.append(child_idx)
         return node_columns
 
-    def _aggregate_small_nodes_by_column(self):
+    def _compute_node_parents(self):
+        node_parents = {idx: set() for idx in range(len(self.node_labels))}
+        for source, target in zip(self.link_sources, self.link_targets):
+            node_parents.setdefault(target, set()).add(source)
+            node_parents.setdefault(source, set())
+        return {node_idx: tuple(sorted(parent_indices)) for node_idx, parent_indices in node_parents.items()}
+
+    def _aggregate_small_nodes_by_column_once(self):
         if self.aggregation_threshold_percent <= 0 or self._total_system_kg <= 0:
-            return
+            return False
         node_columns = self._compute_node_columns()
+        node_parents = self._compute_node_parents()
         threshold_kg = self._total_system_kg * self.aggregation_threshold_percent / 100
         aggregate_groups = {}
         for node_idx in self.node_objects:
@@ -259,15 +267,18 @@ class ImpactRepartitionSankey:
             column = node_columns.get(node_idx)
             if column is None:
                 continue
-            aggregate_groups.setdefault(column, []).append(node_idx)
-        aggregate_groups = {column: group for column, group in aggregate_groups.items() if len(group) >= 2}
+            parent_group = node_parents.get(node_idx, ())
+            aggregate_groups.setdefault((column, parent_group), []).append(node_idx)
+        aggregate_groups = {group_key: group for group_key, group in aggregate_groups.items() if len(group) >= 2}
         if not aggregate_groups:
-            return
+            return False
 
         original_node_keys = {idx: key for key, idx in self.node_indices.items()}
         original_full_labels = list(self.full_node_labels)
         original_color_keys = list(self.node_color_keys)
         original_node_objects = dict(self.node_objects)
+        original_aggregated_node_members = dict(self.aggregated_node_members)
+        original_aggregated_node_classes = dict(self.aggregated_node_classes)
         original_links = list(zip(self.link_sources, self.link_targets, self.link_values))
         original_node_total_kg = list(self.node_total_kg)
         nodes_to_aggregate = {node_idx for group in aggregate_groups.values() for node_idx in group}
@@ -291,11 +302,17 @@ class ImpactRepartitionSankey:
             new_idx = self._add_node(
                 label, original_node_keys[old_idx], color_key=original_color_keys[old_idx], obj=original_node_objects.get(old_idx))
             old_to_new_indices[old_idx] = new_idx
+            if old_idx in original_aggregated_node_members:
+                self.aggregated_node_members[new_idx] = list(original_aggregated_node_members[old_idx])
+            if old_idx in original_aggregated_node_classes:
+                self.aggregated_node_classes[new_idx] = list(original_aggregated_node_classes[old_idx])
 
-        for column, group in aggregate_groups.items():
+        for (column, parent_group), group in aggregate_groups.items():
             group_members = sorted(group, key=lambda idx: original_node_total_kg[idx], reverse=True)
             aggregate_idx = self._add_node(
-                f"Other ({len(group_members)})", ("__aggregated__", column), color_key=f"__aggregated__{column}")
+                f"Other ({len(group_members)})",
+                ("__aggregated__", column, parent_group),
+                color_key=f"__aggregated__{column}_{'_'.join(str(parent_idx) for parent_idx in parent_group)}")
             self.aggregated_node_members[aggregate_idx] = [
                 (original_full_labels[idx], original_node_total_kg[idx]) for idx in group_members]
             self.aggregated_node_classes[aggregate_idx] = sorted({
@@ -320,6 +337,11 @@ class ImpactRepartitionSankey:
         for old_idx, new_idx in old_to_new_indices.items():
             if old_idx not in nodes_to_aggregate and original_node_total_kg[old_idx] > self.node_total_kg[new_idx]:
                 self.node_total_kg[new_idx] = original_node_total_kg[old_idx]
+        return True
+
+    def _aggregate_small_nodes_by_column(self):
+        while self._aggregate_small_nodes_by_column_once():
+            pass
 
     def _compute_node_colors(self):
         # Map each unique color_key to a consistent color
@@ -483,7 +505,7 @@ if __name__ == '__main__':
         class_obj_dict, flat_obj_dict = json_to_system(json_data)
         system = next(iter(class_obj_dict["System"].values()))
     sankey = ImpactRepartitionSankey(
-        system, aggregation_threshold_percent=1, skipped_impact_repartition_classes=[],
+        system, aggregation_threshold_percent=1, skipped_impact_repartition_classes=skipped_impact_repartition_classes,
     skip_total_footprint_split=True)
     fig = sankey.figure()
     fig.show()

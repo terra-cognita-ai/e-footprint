@@ -80,6 +80,67 @@ class TestImpactRepartitionSankey(TestCase):
         self.assertNotIn("Other (2)", sankey.node_labels)
         self.assertEqual({}, sankey.aggregated_node_members)
 
+    def test_aggregate_small_nodes_by_column_keeps_different_parents_separate(self):
+        """Test small nodes are aggregated separately when they do not share the same parent."""
+        system = MagicMock()
+        system.name = "Test system"
+        sankey = ImpactRepartitionSankey(system, aggregation_threshold_percent=15)
+
+        total_idx = sankey._add_node("Test system", ("system", "total"), color_key="__system__")
+        parent_a_idx = sankey._add_node("Parent A", ("parent_a", "energy"), obj=self._make_object("Parent A"))
+        parent_b_idx = sankey._add_node("Parent B", ("parent_b", "energy"), obj=self._make_object("Parent B"))
+        small_a1_idx = sankey._add_node("Small A1", ("small_a1", "energy"), obj=self._make_object("Small A1"))
+        small_a2_idx = sankey._add_node("Small A2", ("small_a2", "energy"), obj=self._make_object("Small A2"))
+        small_b1_idx = sankey._add_node("Small B1", ("small_b1", "energy"), obj=self._make_object("Small B1"))
+        small_b2_idx = sankey._add_node("Small B2", ("small_b2", "energy"), obj=self._make_object("Small B2"))
+
+        sankey._total_system_kg = 1000
+        sankey.node_total_kg[total_idx] = 1000
+        sankey._add_link(total_idx, parent_a_idx, 0.36)
+        sankey._add_link(total_idx, parent_b_idx, 0.36)
+        sankey._add_link(parent_a_idx, small_a1_idx, 0.10)
+        sankey._add_link(parent_a_idx, small_a2_idx, 0.08)
+        sankey._add_link(parent_b_idx, small_b1_idx, 0.10)
+        sankey._add_link(parent_b_idx, small_b2_idx, 0.08)
+
+        sankey._aggregate_small_nodes_by_column()
+        hover_labels = [label for label in sankey._build_hover_labels() if label.startswith("Other (2)<br>")]
+
+        self.assertNotIn("Other (4)", sankey.node_labels)
+        self.assertEqual(2, sankey.node_labels.count("Other (2)"))
+        self.assertEqual(2, len(sankey.aggregated_node_members))
+        self.assertEqual(2, len(hover_labels))
+        self.assertTrue(any("Small A1" in label and "Small A2" in label for label in hover_labels))
+        self.assertTrue(any("Small B1" in label and "Small B2" in label for label in hover_labels))
+        self.assertFalse(any("Small A1" in label and "Small B1" in label for label in hover_labels))
+
+    def test_aggregate_small_nodes_by_column_recomputes_children_after_parent_aggregation(self):
+        """Test child columns are re-aggregated after their parents collapse into an aggregated node."""
+        system = MagicMock()
+        system.name = "Test system"
+        sankey = ImpactRepartitionSankey(system, aggregation_threshold_percent=15)
+
+        total_idx = sankey._add_node("Test system", ("system", "total"), color_key="__system__")
+        parent_a_idx = sankey._add_node("Parent A", ("parent_a", "energy"), obj=self._make_object("Parent A"))
+        parent_b_idx = sankey._add_node("Parent B", ("parent_b", "energy"), obj=self._make_object("Parent B"))
+        child_a_idx = sankey._add_node("Child A", ("child_a", "energy"), obj=self._make_object("Child A"))
+        child_b_idx = sankey._add_node("Child B", ("child_b", "energy"), obj=self._make_object("Child B"))
+
+        sankey._total_system_kg = 1000
+        sankey.node_total_kg[total_idx] = 1000
+        sankey._add_link(total_idx, parent_a_idx, 0.08)
+        sankey._add_link(total_idx, parent_b_idx, 0.07)
+        sankey._add_link(parent_a_idx, child_a_idx, 0.08)
+        sankey._add_link(parent_b_idx, child_b_idx, 0.07)
+
+        sankey._aggregate_small_nodes_by_column()
+        hover_labels = [label for label in sankey._build_hover_labels() if label.startswith("Other (2)<br>")]
+
+        self.assertEqual(2, sankey.node_labels.count("Other (2)"))
+        self.assertEqual(2, len(hover_labels))
+        self.assertTrue(any("Parent A" in label and "Parent B" in label for label in hover_labels))
+        self.assertTrue(any("Child A" in label and "Child B" in label for label in hover_labels))
+
     def test_build_expands_recursive_repartition_for_each_incoming_contribution(self):
         """Test recursive repartition is propagated from each incoming flow contribution."""
         grandchild = _DummyObject("Grandchild", "grandchild")
