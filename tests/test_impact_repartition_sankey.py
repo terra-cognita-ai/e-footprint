@@ -27,6 +27,21 @@ class TestImpactRepartitionSankey(TestCase):
         obj.id = name.lower().replace(" ", "_")
         return obj
 
+    def test_all_canonical_classes_are_in_sankey_columns(self):
+        from efootprint.all_classes_in_order import ALL_CANONICAL_CLASSES_DICT, SANKEY_COLUMNS
+
+        excluded_classes = ["System", "Service"]
+        canonical_classes_dict_without_excluded = {
+            name: cls for name, cls in ALL_CANONICAL_CLASSES_DICT.items() if name not in excluded_classes}
+
+        sankey_column_classes = set()
+        for column_list in SANKEY_COLUMNS:
+            sankey_column_classes.update(column_list)
+
+        missing_classes = set(canonical_classes_dict_without_excluded.values()) - sankey_column_classes
+        self.assertFalse(missing_classes,
+                         f"The following canonical classes are missing from sankey columns: {missing_classes}")
+
     def _build_sankey(self, aggregation_threshold_percent):
         system = MagicMock()
         system.name = "Test system"
@@ -250,8 +265,8 @@ class TestImpactRepartitionSankey(TestCase):
         column_metadata = sankey.get_column_metadata()
 
         self.assertEqual([
-            {"column_index": 1, "x_center": 0.5, "class_names": ["Device", "Server"]},
-            {"column_index": 2, "x_center": 0.8333333333333334, "class_names": ["Router"]},
+            {"column_index": 2, "x_center": 0.625, "class_names": ["Device", "Server"]},
+            {"column_index": 3, "x_center": 0.875, "class_names": ["Router"]},
         ], column_metadata)
 
     def test_get_column_metadata_includes_aggregated_member_classes(self):
@@ -262,8 +277,8 @@ class TestImpactRepartitionSankey(TestCase):
         column_metadata = sankey.get_column_metadata()
 
         self.assertEqual([
-            {"column_index": 1, "x_center": 0.5, "class_names": ["Parent", "SmallA", "SmallB"]},
-            {"column_index": 2, "x_center": 0.8333333333333334, "class_names": ["ChildBig", "ChildSmallA", "ChildSmallB"]},
+            {"column_index": 2, "x_center": 0.625, "class_names": ["Parent", "SmallA", "SmallB"]},
+            {"column_index": 3, "x_center": 0.875, "class_names": ["ChildBig", "ChildSmallA", "ChildSmallB"]},
         ], column_metadata)
 
     def test_compute_node_columns_places_shared_child_after_deepest_parent(self):
@@ -284,11 +299,11 @@ class TestImpactRepartitionSankey(TestCase):
         sankey._add_link(deep_parent_idx, shared_child_idx, 0.1)
 
         self.assertEqual({
-            total_idx: 0,
-            direct_parent_idx: 1,
-            intermediate_idx: 1,
-            deep_parent_idx: 2,
-            shared_child_idx: 3,
+            total_idx: 1,
+            direct_parent_idx: 2,
+            intermediate_idx: 2,
+            deep_parent_idx: 3,
+            shared_child_idx: 4,
         }, sankey._compute_node_columns())
 
     def test_get_column_information_distinguishes_manual_and_impact_columns(self):
@@ -308,7 +323,6 @@ class TestImpactRepartitionSankey(TestCase):
         sankey = ImpactRepartitionSankey(system, aggregation_threshold_percent=0)
 
         self.assertEqual([
-            {"column_index": 0, "column_type": "manual_split", "description": "Full system footprint"},
             {"column_index": 1, "column_type": "manual_split", "description": "Fabrication / energy footprint"},
             {"column_index": 2, "column_type": "manual_split", "description": "Per object category footprint"},
             {"column_index": 3, "column_type": "manual_split", "description": "Per object footprint"},
@@ -332,7 +346,7 @@ class TestImpactRepartitionSankey(TestCase):
         fig = ImpactRepartitionSankey(system, aggregation_threshold_percent=0).figure()
 
         self.assertEqual(1, len(fig.layout.annotations))
-        self.assertIn("Column 0: Full system footprint", fig.layout.annotations[0]["text"])
+        self.assertIn("Column 1: Fabrication / energy footprint", fig.layout.annotations[0]["text"])
         self.assertIn("Column 2: Per object category footprint", fig.layout.annotations[0]["text"])
         self.assertIn("Column 4: Grandchild", fig.layout.annotations[0]["text"])
 
@@ -405,6 +419,7 @@ class TestImpactRepartitionSankey(TestCase):
         ])
 
     def test_skip_phase_footprint_split_removes_fabrication_energy_nodes_only(self):
+        """Test with skip_total=False so system node exists, and skip_phase=True removes phase nodes."""
         grandchild = _DummyObject("Grandchild", "grandchild")
         child = _DummyObject("Child", "child")
         child.impact_repartition = {grandchild: _DummyQuantity(1)}
@@ -417,7 +432,8 @@ class TestImpactRepartitionSankey(TestCase):
         system.energy_footprint_sum_over_period = {}
 
         sankey = ImpactRepartitionSankey(
-            system, aggregation_threshold_percent=0, skip_phase_footprint_split=True)
+            system, aggregation_threshold_percent=0,
+            skip_total_footprint_split=False, skip_phase_footprint_split=True)
 
         sankey.build()
 
